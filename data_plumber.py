@@ -1,3 +1,4 @@
+from os import remove
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -45,10 +46,10 @@ def main():
     # active_country = "sg"
 
     ### Set all fields based on active_config and config_lookup
-    fields = config_lookup[active_config]['fields']
-    required_fields = config_lookup[active_config]['required_fields']
-    date_fields = config_lookup[active_config]['date_fields']
-    phone_fields = config_lookup[active_config]['phone_fields']
+    pre_fields = config_lookup[active_config]['fields']
+    pre_required_fields = config_lookup[active_config]['required_fields']
+    pre_date_fields = config_lookup[active_config]['date_fields']
+    pre_phone_fields = config_lookup[active_config]['phone_fields']
 
     ### set active country settings
     country_config = country_code_lookup[active_country]
@@ -57,20 +58,45 @@ def main():
     def output_dummy_data(df_input):
         return df_input
     
-    def read_excel_date(date):
-        return xlrd.xldate.xldate_as_datetime(date, 0)
+    def fix_excel_date(serial_date):
+        """fix excel date with python datetime"""
+        serial_int = int(serial_date)
+        return datetime.datetime(1900, 1, 1) + datetime.timedelta(days=serial_int)
         
     def process_input_df(df_input):
         """Data preprocessing for dataframe to get uploadable csv"""
         df = df_input.copy()
+        col_list = df.columns.to_list()
 
-        ### Add missing fields with null value
-        for field in fields:
-            if field not in df:
-                df[field] = None
-        
-        ### Reorder fields and cut off wrongly named/ extra fields in one go
-        df = df[fields].copy()
+        ### Global vars for field lists
+        global fields
+        global required_fields
+        global date_fields
+        global phone_fields
+
+        global not_fields
+        global not_required_fields
+        global not_date_fields
+        global not_phone_fields
+
+        global wrong_fields
+
+        ### Fields that are present in df
+        fields = [field for field in pre_fields if field in col_list]
+        required_fields = [field for field in pre_required_fields if field in col_list]
+        date_fields = [field for field in pre_date_fields if field in col_list]
+        phone_fields = [field for field in pre_phone_fields if field in col_list]
+
+        ### Fields that are absent in df
+        not_fields = [field for field in pre_fields if field not in col_list]
+        not_required_fields = [field for field in pre_required_fields if field not in col_list]
+        not_date_fields = [field for field in pre_date_fields if field not in col_list]
+        not_phone_fields = [field for field in pre_phone_fields if field not in col_list]
+
+        ### Fields that shouldn't be there
+        wrong_fields = [field for field in col_list if field not in pre_fields]
+
+        # print(df.dtypes, "after wrong fields")
 
         ### Process date fields
         for date_field in date_fields:
@@ -79,12 +105,11 @@ def main():
 
             ### Fix Excel Fields
             new_list = []
-        
-            for i in date_list:
-                if len(i) == 5:
-                    new_list.append(str(read_excel_date(int(i))))
+            for item in date_list:
+                if item and len(item) == 5:
+                    new_list.append(fix_excel_date(item))
                 else:
-                    new_list.append(i)
+                    new_list.append(item)
             
             df[date_field] = new_list
 
@@ -93,12 +118,17 @@ def main():
             df[date_field] = df[date_field].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         ### Process Gender Fields
-        df.loc[df['gender'].str.lower().str.startswith("m"), 'gender'] = "Male"
-        df.loc[df['gender'].str.lower().str.startswith("f"), 'gender'] = "Female"
+        if 'gender' in fields:
+            df.loc[df['gender'].str.lower().str.startswith("m"), 'gender'] = "Male"
+            df.loc[df['gender'].str.lower().str.startswith("f"), 'gender'] = "Female"
         
 
         ### Format Ethnicity fields
-        df['ethnicity'] = df['ethnicity'].str.title()
+        if 'ethnicity' in fields:
+            df['ethnicity'] = df['ethnicity'].str.title()
+
+        ### Initiate issues field
+        df['upload_issues'] = None
 
         ### Process phone number fields
         for phone_field in phone_fields:
@@ -128,7 +158,6 @@ def main():
             df.loc[df[phone_field].astype(str).map(len) <= country_config['digits_ex'] , check_field] = "+" + country_config['code']  + df[phone_field]
 
             ### Highlight issues for malformed phone number
-            df['upload_issues'] = ""
             df.loc[df[check_field].isin(['ambiguous']) | df[check_field].isnull(), 'upload_issues' ] = df['upload_issues'] + f", check {phone_field} field"        
         
 
@@ -137,16 +166,44 @@ def main():
             df.loc[df[required_field].isnull(), 'upload_issues' ] = df['upload_issues'] + f", {required_field} missing"
         
         ### Highlight gender issues
-        df.loc[~df['gender'].isin(config_lookup['saas']['enum_fields']['gender']), 'upload_issues'] = df['upload_issues'] + ", check gender field"
+        if 'gender' in fields:
+            df.loc[~df['gender'].isin(config_lookup['saas']['enum_fields']['gender']), 'upload_issues'] = df['upload_issues'] + ", check gender field"
 
         ### Highlight racial issues
-        df.loc[~df['ethnicity'].isin(config_lookup['saas']['enum_fields']['ethnicity']), 'upload_issues'] = df['upload_issues'] + ", check ethnicity field"
-        
+        if 'ethnicity' in fields:
+            df.loc[~df['ethnicity'].isin(config_lookup['saas']['enum_fields']['ethnicity']), 'upload_issues'] = df['upload_issues'] + ", check ethnicity field"
+
+        # for field in not_fields:
+
+        # print(df.dtypes, "before return")
         return(df)
 
+    def add_missing_fields(df):
+        """Add missing fields"""
+        df = df.copy()
+        for field in not_fields:
+            df[field] = None
+        
+        return df
+
+    def remove_wrong_fields(df):
+        """remove wrong fields"""
+        df = df.copy()
+        df.drop(columns=wrong_fields, inplace=True)
+        return df
+        
     
+    def fix_field_set(df):
+        """Add missing fields, remove others"""
+        df = df[fields].copy()
+
+        for field in not_fields:
+            df[field] = None
+        
+        return df
+
     def check_fields_missing_values(df, field_list):
-        """check if required fields are null using a df and a reference field list"""
+        """check if required fields are null using a df and a reference field list. should only run after fix_field_set"""
         null_count = []
         for field in field_list:
             _dict = {}
@@ -158,6 +215,7 @@ def main():
         null_count.append(both_dict)
         
         return null_count
+
 
     def parse_dates(df):
         """Parse date fields and cast them to for upload"""
@@ -191,21 +249,48 @@ def main():
                 st.subheader("Input Data")
                 input_df
 
-    ### Preprocess and display data
-            output_df = process_input_df(input_df)
-            with st.container():
-                st.subheader("Output Data")
-                output_df
+    ### Preprocess data
+            processed_df = process_input_df(input_df)
+            # print(processed_df.dtypes, "processed")
 
-    ### Highlight major issues
-            ### Issues with Required fields
+    ### OUTPUT df container
+            container_output = st.container()
+            container_output.subheader("Output Data")
+            # container_output.write(processed_df)
+            
+
+    ### Highlight: Missing Fields
+            st.subheader("Missing/ incorrectly named columns")
+            missing_df = pd.DataFrame(columns=['missing_field', 'required'])
+            for field in not_fields:
+                if field in pre_required_fields:
+                    missing_df = missing_df.append({'missing_field': field, 'required': 'Required'}, ignore_index=True)
+                else:
+                    missing_df = missing_df.append({'missing_field': field, 'required': ""}, ignore_index=True)
+            missing_df
+
+    ### Add missing fields
+            full_df_with_wrong_fields = add_missing_fields(processed_df)
+            # print(full_df_with_wrong_fields.dtypes, "full df with wrong fields")
+    
+    ### Remove wrong fields
+            output_df = remove_wrong_fields(full_df_with_wrong_fields)
+            print(output_df.dtypes, "before order")
+            output_df_display_order = ['upload_issues'] + pre_fields
+            output_df = output_df[output_df_display_order] 
+            print(output_df.dtypes, "after order")
+            container_output.write(output_df)
+            # print(wrong_fields)
+
+    ### Highlight: Issues with Required fields
+            st.header("Step 3: Fix Issues")
             required_null = check_fields_missing_values(output_df, required_fields)
             st.subheader("Issues with required fields")
             for i in required_null:
                 for k,v in i.items():
-                    st.write(f"{k}: {v} missing records")
+                    st.markdown(f"**{k}:** {v} missing records")
             
-            ### Count of issues
+    ### Highlight: All issues
             st.subheader("Frequency of issues")
             issue_list = output_df['upload_issues'].str.cat(sep=', ').split(', ')
             issue_dict = Counter(issue_list)
@@ -221,7 +306,7 @@ def main():
     ### [Missing] Output of csv files    
             if output_df is not None:
 
-                clean_df = output_df[fields].copy()
+                clean_df = output_df[pre_fields].copy()
 
                 out_csv = output_csv(output_df, True)
                 out_csv_noheader = output_csv(clean_df, False)
@@ -229,7 +314,7 @@ def main():
                 csv_path = output_name + ".csv"
                 csv_path_noheader = output_name + "_for_upload.csv"
 
-                st.header("\n\nStep 3: Download CSV")
+                st.header("\n\nStep 4: Download CSV")
                 st.download_button(
                     label = "Download CSV (with headers)",
                     data=out_csv,
