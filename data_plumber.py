@@ -260,6 +260,7 @@ def main():
             
 
     ### Highlight: Missing Fields
+            st.header("Step 3: Fix Issues")
             st.subheader("Missing/ incorrectly named columns")
             missing_df = pd.DataFrame(columns=['missing_field', 'required'])
             for field in not_fields:
@@ -283,7 +284,6 @@ def main():
             # print(wrong_fields)
 
     ### Highlight: Issues with Required fields
-            st.header("Step 3: Fix Issues")
             required_null = check_fields_missing_values(output_df, required_fields)
             st.subheader("Issues with required fields")
             for i in required_null:
