@@ -12,7 +12,7 @@ def main():
     config_lookup = {
         "saas": {
             "fields": ["first_name","last_name","patient_id","email","mobile","dob","gender","ethnicity","clinician_name","track_name","track_date"],
-            "required_fields": ["patient_id","email","mobile"],
+            "required_fields": ["first_name","patient_id","email","mobile"],
             "date_fields": ["dob","track_date"],
             "phone_fields": ["mobile"],
             "enum_fields": {
