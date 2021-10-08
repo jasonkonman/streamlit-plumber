@@ -3,7 +3,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import xlrd
-import re
 import datetime
 from collections import Counter
 
@@ -60,8 +59,8 @@ def main():
     
     def fix_excel_date(serial_date):
         """fix excel date with python datetime"""
-        serial_int = int(serial_date)
-        return datetime.datetime(1900, 1, 1) + datetime.timedelta(days=serial_int)
+        serial_int = int(serial_date) - 1
+        return datetime.datetime(1899, 12, 31) + datetime.timedelta(days=serial_int)
         
     def process_input_df(df_input):
         """Data preprocessing for dataframe to get uploadable csv"""
@@ -106,7 +105,8 @@ def main():
             ### Fix Excel Fields
             new_list = []
             for item in date_list:
-                if item and len(item) == 5:
+                # print(type(item))
+                if item and len(str(item)) == 5:
                     new_list.append(fix_excel_date(item))
                 else:
                     new_list.append(item)
@@ -115,12 +115,12 @@ def main():
 
             ### Convert to ISO-8601 format
             df[date_field] = pd.to_datetime(df[date_field])
-            df[date_field] = df[date_field].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            df[date_field] = df[date_field].dt.strftime('%Y-%m-%d')
 
         ### Process Gender Fields
         if 'gender' in fields:
-            df.loc[df['gender'].str.lower().str.startswith("m"), 'gender'] = "Male"
-            df.loc[df['gender'].str.lower().str.startswith("f"), 'gender'] = "Female"
+            df.loc[(df['gender'].str.lower().str.startswith("m")) & (df['gender'].notnull()), 'gender'] = "Male"
+            df.loc[(df['gender'].str.lower().str.startswith("f")) & (df['gender'].notnull()), 'gender'] = "Female"
         
 
         ### Format Ethnicity fields
@@ -128,14 +128,12 @@ def main():
             df['ethnicity'] = df['ethnicity'].str.title()
 
         ### Initiate issues field
-        df['upload_issues'] = None
+        df['upload_issues'] = ''
 
         ### Process phone number fields
         for phone_field in phone_fields:
-            ### change field to string
-            df[phone_field] = df[phone_field].astype(str)
             ### strip non numbers
-            df[phone_field] = df[phone_field].str.extract('(\d+)')
+            df[phone_field] = np.where((df[phone_field].str.match("^\+.*")) & (df[phone_field].notnull()), df[phone_field], df[phone_field].str.replace(r"[\D]",'', regex=True))
             # df.loc[df[phone_field].str.match("^\+.*", na=None), phone_field] = "+" + df[phone_field].str.extract('(\d+)')
             # df.loc[df[phone_field].str.match("^[0-9].*", na=None), phone_field] = df[phone_field].str.extract('(\d+)')
 
@@ -143,22 +141,24 @@ def main():
             check_field = phone_field + "_check"
 
             ### address those starting with "+", mark as clean
-            # df.loc[df[phone_field].str.startswith("+"), check_field] = "clean"
+            df.loc[(df[phone_field].str.startswith("+")) & (df[phone_field].notnull()), check_field] = "clean"
             
             ### ignore everything starting with local country code, just add "+"
-            df.loc[df[phone_field].str.startswith(country_config['code']), check_field] = "clean"
-            df.loc[df[phone_field].str.startswith(country_config['code']), phone_field] = "+" + df[phone_field]
+            df.loc[(df[phone_field].str.startswith(country_config['code'])) & (df[phone_field].notnull()), check_field] = "clean"
+            df.loc[(df[phone_field].str.startswith(country_config['code'])) & (df[phone_field].notnull()), phone_field] = "+" + df[phone_field].astype(str)
+
 
             ### for items starting with 0, remove zero, then add +countrycode
-            df.loc[df[phone_field].str.startswith("0"), check_field] = "clean"
-            df.loc[df[phone_field].str.startswith("0"), phone_field] = "+" + df[phone_field].str.lstrip("0")
+            df.loc[(df[phone_field].str.startswith("0")) & (df[phone_field].notnull()), check_field] = "ambiguous"
+            df.loc[(df[phone_field].str.startswith("0")) & (df[phone_field].notnull()), phone_field] = "+" + country_config['code']  + df[phone_field].str.lstrip("0")
+
 
             ### for items with same or less than optimal format, add local country code
-            df.loc[df[phone_field].astype(str).map(len) <= country_config['digits_ex'] , check_field] = "ambiguous"
-            df.loc[df[phone_field].astype(str).map(len) <= country_config['digits_ex'] , check_field] = "+" + country_config['code']  + df[phone_field]
+            df.loc[(df[phone_field].astype(str).map(len) <= country_config['digits_ex']) & (df[phone_field].notnull()) , check_field] = "ambiguous"
+            df.loc[(df[phone_field].astype(str).map(len) <= country_config['digits_ex']) & (df[phone_field].notnull()) , phone_field] = "+" + country_config['code']  + df[phone_field].astype(str)
 
             ### Highlight issues for malformed phone number
-            df.loc[df[check_field].isin(['ambiguous']) | df[check_field].isnull(), 'upload_issues' ] = df['upload_issues'] + f", check {phone_field} field"        
+            df.loc[(df[check_field].isin(['ambiguous']) | df[check_field].isnull()), 'upload_issues' ] = df['upload_issues'].astype(str) + f", check {phone_field} field"
         
 
         ### Highlight issues with required fields
@@ -173,7 +173,8 @@ def main():
         if 'ethnicity' in fields:
             df.loc[~df['ethnicity'].isin(config_lookup['saas']['enum_fields']['ethnicity']), 'upload_issues'] = df['upload_issues'] + ", check ethnicity field"
 
-        # for field in not_fields:
+        # clean up upload_issues
+        df['upload_issues'] = df['upload_issues'].str.lstrip(', ')
 
         # print(df.dtypes, "before return")
         return(df)
@@ -230,12 +231,16 @@ def main():
     def download_success():
         """Success message on download"""
         st.success("Download Successful!")
+        st.empty()
+
 
 
     ### Checking if file is valid
     if submit_button:
         try:
             st.success(f"{input_file.name} has been selected\n\n")
+            st.text("")
+            st.markdown("***")
             st.header("\n\nStep 2: Check Data")
             if input_file is None:
                 pass
@@ -255,11 +260,14 @@ def main():
 
     ### OUTPUT df container
             container_output = st.container()
+            container_output.text("")
             container_output.subheader("Output Data")
             # container_output.write(processed_df)
             
 
     ### Highlight: Missing Fields
+            st.text("")
+            st.markdown("***")
             st.header("Step 3: Fix Issues")
             st.subheader("Missing/ incorrectly named columns")
             missing_df = pd.DataFrame(columns=['missing_field', 'required'])
@@ -285,22 +293,25 @@ def main():
 
     ### Highlight: Issues with Required fields
             required_null = check_fields_missing_values(output_df, required_fields)
+            st.text("")
             st.subheader("Issues with required fields")
             for i in required_null:
                 for k,v in i.items():
-                    st.markdown(f"**{k}:** {v} missing records")
+                    st.markdown("- **" + k + ":** " + str(v) + " missing records")
             
     ### Highlight: All issues
+            st.text("")
             st.subheader("Frequency of issues")
             issue_list = output_df['upload_issues'].str.cat(sep=', ').split(', ')
             issue_dict = Counter(issue_list)
             
 
             for k,v in issue_dict.items():
+                print (k)
                 if k == "":
-                    st.write(f"No Issues")
+                    st.markdown("- **" + str(v) + " records with no issues**")
                 else:
-                    st.write(f"{k}: {v} times")
+                    st.markdown("- **" + k + ":** " + str(v) + " times")
 
 
     ### [Missing] Output of csv files    
@@ -309,18 +320,37 @@ def main():
                 clean_df = output_df[pre_fields].copy()
 
                 out_csv = output_csv(output_df, True)
-                out_csv_noheader = output_csv(clean_df, False)
+                out_csv_noheader = output_csv(clean_df, True)
 
                 csv_path = output_name + ".csv"
                 csv_path_noheader = output_name + "_for_upload.csv"
-
+                
+                st.text("")
+                st.markdown("***")
                 st.header("\n\nStep 4: Download CSV")
+                st.subheader("CSV with headers - for checking and fixing")
                 st.download_button(
                     label = "Download CSV (with headers)",
                     data=out_csv,
                     file_name=csv_path,
                     mime='text/csv',
                     on_click=download_success)
+
+
+
+                ### Don't allow download if bo
+                count_missing = 0
+
+                for field in pre_required_fields:
+                    count_missing += output_df[output_df[field].isnull()].shape[0]
+                
+                
+                st.text("")
+                st.text("")
+                
+                st.subheader("CSV without headers - to upload once data is clean")
+                if missing_df[missing_df['required'] == 'Required'].shape[0] > 0 or count_missing > 0 :
+                    st.warning("Required fields have issues. File is not ready for upload until they are fixed")
 
                 st.download_button(
                     label = "Download CSV (no headers)",
