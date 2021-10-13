@@ -320,7 +320,7 @@ def main():
                 clean_df = output_df[pre_fields].copy()
 
                 out_csv = output_csv(output_df, True)
-                out_csv_noheader = output_csv(clean_df, True)
+                out_csv_noheader = output_csv(clean_df, False)
 
                 csv_path = output_name + ".csv"
                 csv_path_noheader = output_name + "_for_upload.csv"
